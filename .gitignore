@@ -1,0 +1,16 @@
+# Build output
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.su
+
+# macOS
+.DS_Store
+
+# VS Code (optional — remove this block if you want to share your VS Code settings)
+.vscode/
