@@ -18,7 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
+#include <string.h>
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -95,12 +95,46 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint8_t msg[] = "UART ready\r\n";
+  HAL_UART_Transmit(&huart2, msg, sizeof(msg)-1, HAL_MAX_DELAY);
+
+  uint8_t received_byte;
+  char cmd_buf[64];
+  uint8_t cmd_pos = 0;
+
   while (1)
   {
-    /* USER CODE END WHILE */
-    /* USER CODE BEGIN 3 */
-    HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-    HAL_Delay(500);
+    HAL_UART_Receive(&huart2, &received_byte, 1, HAL_MAX_DELAY);
+
+    if (received_byte == '\r' || received_byte == '\n')
+    {
+        cmd_buf[cmd_pos] = '\0'; // terminate the string
+
+        if (strcmp(cmd_buf, "HI") == 0)
+        {
+            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nHELLO\r\n> ", 11, 100);
+        }
+        else if (strcmp(cmd_buf, "LED ON") == 0)
+        {
+            HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nLED ON\r\n> ", 11, 100);
+        }
+        else if (strcmp(cmd_buf, "LED OFF") == 0)
+        {
+            HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nLED OFF\r\n> ", 12, 100);
+        }
+        else if (cmd_pos > 0)
+        {
+            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nUnknown command\r\n> ", 20, 100);
+        }
+
+        cmd_pos = 0; // reset buffer for next command
+    }
+    else if (cmd_pos < 63)
+    {
+        cmd_buf[cmd_pos++] = received_byte;
+    }
   }
   /* USER CODE END 3 */
 }
