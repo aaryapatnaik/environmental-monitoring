@@ -43,7 +43,10 @@
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+uint8_t rx_byte;
+char cmd_buf[64];
+uint8_t cmd_pos = 0;
+uint8_t cmd_ready = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,50 +93,39 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  uint8_t startup[] = "UART ready\r\n> ";
+  HAL_UART_Transmit(&huart2, startup, sizeof(startup)-1, 100);
+  HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
 
+  HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(USART2_IRQn);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  uint8_t msg[] = "UART ready\r\n";
-  HAL_UART_Transmit(&huart2, msg, sizeof(msg)-1, HAL_MAX_DELAY);
-
-  uint8_t received_byte;
-  char cmd_buf[64];
-  uint8_t cmd_pos = 0;
 
   while (1)
   {
-    HAL_UART_Receive(&huart2, &received_byte, 1, HAL_MAX_DELAY);
-
-    if (received_byte == '\r' || received_byte == '\n')
-    {
-        cmd_buf[cmd_pos] = '\0'; // terminate the string
+    if (cmd_ready) {
+        cmd_ready = 0;
 
         if (strcmp(cmd_buf, "HI") == 0)
-        {
-            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nHELLO\r\n> ", 11, 100);
-        }
+            HAL_UART_Transmit(&huart2, (uint8_t*)"HELLO\r\n> ", 9, 100);
         else if (strcmp(cmd_buf, "LED ON") == 0)
         {
             HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
-            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nLED ON\r\n> ", 11, 100);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"LED ON\r\n> ", 10, 100);
         }
         else if (strcmp(cmd_buf, "LED OFF") == 0)
         {
             HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
-            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nLED OFF\r\n> ", 12, 100);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"LED OFF\r\n> ", 11, 100);
         }
-        else if (cmd_pos > 0)
-        {
-            HAL_UART_Transmit(&huart2, (uint8_t*)"\r\nUnknown command\r\n> ", 20, 100);
-        }
+        else
+            HAL_UART_Transmit(&huart2, (uint8_t*)"Unknown command\r\n> ", 18, 100);
 
-        cmd_pos = 0; // reset buffer for next command
-    }
-    else if (cmd_pos < 63)
-    {
-        cmd_buf[cmd_pos++] = received_byte;
+        cmd_pos = 0;
+        memset(cmd_buf, 0, sizeof(cmd_buf));
     }
   }
   /* USER CODE END 3 */
@@ -259,7 +251,23 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART2)
+    {
+        if (rx_byte == '\r' || rx_byte == '\n')
+        {
+            cmd_buf[cmd_pos] = '\0';
+            cmd_ready = 1;
+        }
+        else if (cmd_pos < 63)
+        {
+            cmd_buf[cmd_pos++] = rx_byte;
+        }
 
+        HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+    }
+}
 /* USER CODE END 4 */
 
 /**
