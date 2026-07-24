@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <stdio.h>
+#include "stm32f4xx_hal_adc.h"
 #include <string.h>
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -41,6 +43,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart2;
+ADC_HandleTypeDef hadc1;
 
 /* USER CODE BEGIN PV */
 uint8_t rx_byte;
@@ -53,6 +56,7 @@ uint8_t cmd_ready = 0;
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
+static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -92,6 +96,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   uint8_t startup[] = "UART ready\r\n> ";
   HAL_UART_Transmit(&huart2, startup, sizeof(startup)-1, 100);
@@ -120,6 +125,17 @@ int main(void)
         {
             HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
             HAL_UART_Transmit(&huart2, (uint8_t*)"LED OFF\r\n> ", 11, 100);
+        }
+        else if (strcmp(cmd_buf, "READ_ADC") == 0)   // <-- add this block
+        {
+          HAL_ADC_Start(&hadc1);
+          HAL_ADC_PollForConversion(&hadc1, 100);
+          uint32_t adc_val = HAL_ADC_GetValue(&hadc1);
+          HAL_ADC_Stop(&hadc1);
+
+          char adc_str[32];
+          int len = snprintf(adc_str, sizeof(adc_str), "ADC: %lu\r\n> ", adc_val);
+          HAL_UART_Transmit(&huart2, (uint8_t*)adc_str, len, 100);
         }
         else
             HAL_UART_Transmit(&huart2, (uint8_t*)"Unknown command\r\n> ", 18, 100);
@@ -209,6 +225,37 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 2 */
 
+}
+
+static void MX_ADC1_Init(void)
+{
+    // Enable clocks for ADC1 and GPIOA
+    __HAL_RCC_ADC1_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE(); // already enabled, but harmless
+
+    // Configure PA0 as analog input
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_PIN_0;
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    // Configure ADC1
+    hadc1.Instance = ADC1;
+    hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+    hadc1.Init.ScanConvMode = DISABLE;
+    hadc1.Init.ContinuousConvMode = DISABLE;
+    hadc1.Init.DiscontinuousConvMode = DISABLE;
+    hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+    hadc1.Init.NbrOfConversion = 1;
+    HAL_ADC_Init(&hadc1);
+
+    // Configure channel 0
+    ADC_ChannelConfTypeDef sConfig = {0};
+    sConfig.Channel = ADC_CHANNEL_0;
+    sConfig.Rank = 1;
+    sConfig.SamplingTime = ADC_SAMPLETIME_84CYCLES;
+    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
 }
 
 /**
