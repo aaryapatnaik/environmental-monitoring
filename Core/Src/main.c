@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include "stm32f4xx_hal_adc.h"
 #include <string.h>
+#include "bmp280.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -44,12 +45,14 @@
 /* Private variables ---------------------------------------------------------*/
 UART_HandleTypeDef huart2;
 ADC_HandleTypeDef hadc1;
+I2C_HandleTypeDef hi2c1;
 
 /* USER CODE BEGIN PV */
 uint8_t rx_byte;
 char cmd_buf[64];
 uint8_t cmd_pos = 0;
 uint8_t cmd_ready = 0;
+BMP280_HandleTypeDef bmp280;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -58,7 +61,7 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
-
+static void MX_I2C1_Init(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -97,7 +100,20 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_ADC1_Init();
+
   /* USER CODE BEGIN 2 */
+  MX_I2C1_Init();
+
+  uint8_t bmp_ok = 0;
+  for (int i = 0; i < 5 && !bmp_ok; i++) {
+      HAL_Delay(50);
+      if (BMP280_Init(&bmp280, &hi2c1) == HAL_OK) bmp_ok = 1;
+  }
+  if (bmp_ok)
+      HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init OK\r\n", 16, 100);
+  else
+      HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init FAILED\r\n", 20, 100);
+
   uint8_t startup[] = "UART ready\r\n> ";
   HAL_UART_Transmit(&huart2, startup, sizeof(startup)-1, 100);
   HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
@@ -136,6 +152,23 @@ int main(void)
           char adc_str[32];
           int len = snprintf(adc_str, sizeof(adc_str), "ADC: %lu\r\n> ", adc_val);
           HAL_UART_Transmit(&huart2, (uint8_t*)adc_str, len, 100);
+        }
+        else if (strcmp(cmd_buf, "READ_BMP") == 0)
+        {
+          float temp_c, press_hpa;
+          if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
+          {
+            char bmp_str[64];
+            int len = snprintf(bmp_str, sizeof(bmp_str), "Temp: %.2f C, Pressure: %.2f hPa\r\n> ", temp_c, press_hpa);
+            HAL_UART_Transmit(&huart2, (uint8_t*)bmp_str, len, 100);
+          }
+          else
+            HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
+        }
+        else if (strcmp(cmd_buf, "DEBUG_BMP") == 0)
+        {
+          BMP280_DebugPrint(&bmp280, &huart2);
+          HAL_UART_Transmit(&huart2, (uint8_t*)"> ", 2, 100);
         }
         else
             HAL_UART_Transmit(&huart2, (uint8_t*)"Unknown command\r\n> ", 18, 100);
@@ -192,6 +225,34 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+static void MX_I2C1_Init(void) // i2c1 init
+{
+    __HAL_RCC_I2C1_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;   // PB8 = SCL, PB9 = SDA
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    hi2c1.Instance = I2C1;
+    hi2c1.Init.ClockSpeed = 100000;
+    hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+    hi2c1.Init.OwnAddress1 = 0;
+    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c1.Init.OwnAddress2 = 0;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+    {
+        Error_Handler();
+    }
 }
 
 /**
