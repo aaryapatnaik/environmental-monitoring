@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include "stm32f4xx_hal_adc.h"
 #include <string.h>
+#include "timer.h"
 #include "bmp280.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -62,6 +63,7 @@ static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_I2C1_Init(void);
+void Sensors_Sample_And_Report(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -109,10 +111,14 @@ int main(void)
       HAL_Delay(50);
       if (BMP280_Init(&bmp280, &hi2c1) == HAL_OK) bmp_ok = 1;
   }
-  if (bmp_ok)
+  if (bmp_ok) {
       HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init OK\r\n", 16, 100);
-  else
+  }
+  else {
       HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init FAILED\r\n", 20, 100);
+  }
+  Sample_Timer_Init();
+  // HAL_UART_Transmit(&huart2, (uint8_t*)"Timer init called\r\n", 19, 100);
 
   uint8_t startup[] = "UART ready\r\n> ";
   HAL_UART_Transmit(&huart2, startup, sizeof(startup)-1, 100);
@@ -155,15 +161,16 @@ int main(void)
         }
         else if (strcmp(cmd_buf, "READ_BMP") == 0)
         {
-          float temp_c, press_hpa;
-          if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
-          {
-            char bmp_str[64];
-            int len = snprintf(bmp_str, sizeof(bmp_str), "Temp: %.2f C, Pressure: %.2f hPa\r\n> ", temp_c, press_hpa);
-            HAL_UART_Transmit(&huart2, (uint8_t*)bmp_str, len, 100);
-          }
-          else
-            HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
+          // float temp_c, press_hpa;
+          // if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
+          // {
+          //   char bmp_str[64];
+          //   int len = snprintf(bmp_str, sizeof(bmp_str), "Temp: %.2f C, Pressure: %.2f hPa\r\n> ", temp_c, press_hpa);
+          //   HAL_UART_Transmit(&huart2, (uint8_t*)bmp_str, len, 100);
+          // }
+          // else
+          //   HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
+          Sensors_Sample_And_Report();
         }
         else if (strcmp(cmd_buf, "DEBUG_BMP") == 0)
         {
@@ -175,6 +182,10 @@ int main(void)
 
         cmd_pos = 0;
         memset(cmd_buf, 0, sizeof(cmd_buf));
+    }
+    if (sample_ready) {
+      sample_ready = 0;
+      Sensors_Sample_And_Report();
     }
   }
   /* USER CODE END 3 */
@@ -374,6 +385,30 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         }
 
         HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+    }
+}
+
+void Sensors_Sample_And_Report(void)
+{
+    float temp_c, press_hpa;
+    uint32_t adc_val = 0;
+
+    HAL_ADC_Start(&hadc1);
+    HAL_ADC_PollForConversion(&hadc1, 100);
+    adc_val = HAL_ADC_GetValue(&hadc1);
+    HAL_ADC_Stop(&hadc1);
+
+    if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
+    {
+        char out_str[96];
+        int len = snprintf(out_str, sizeof(out_str),
+            "Temp: %.2f C, Pressure: %.2f hPa, ADC: %lu\r\n> ",
+            temp_c, press_hpa, (unsigned long)adc_val);
+        HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, 100);
+    }
+    else
+    {
+        HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
     }
 }
 /* USER CODE END 4 */
