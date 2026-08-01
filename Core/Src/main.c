@@ -23,6 +23,7 @@
 #include <string.h>
 #include "timer.h"
 #include "bmp280.h"
+#include "lcd.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -105,6 +106,8 @@ int main(void)
 
   /* USER CODE BEGIN 2 */
   MX_I2C1_Init();
+  LCD_Init();
+  
 
   uint8_t bmp_ok = 0;
   for (int i = 0; i < 5 && !bmp_ok; i++) {
@@ -405,6 +408,13 @@ void Sensors_Sample_And_Report(void)
             "Temp: %.2f C, Pressure: %.2f hPa, ADC: %lu\r\n> ",
             temp_c, press_hpa, (unsigned long)adc_val);
         HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, 100);
+
+        // printing to lcd
+        char lcd_line1[17], lcd_line2[17];
+        snprintf(lcd_line1, sizeof(lcd_line1), "Temp: %.1f C", temp_c);
+        snprintf(lcd_line2, sizeof(lcd_line2), "Press: %.0f hPa", press_hpa);
+        lcd_print_line(0, lcd_line1);
+        lcd_print_line(1, lcd_line2);
     }
     else
     {
