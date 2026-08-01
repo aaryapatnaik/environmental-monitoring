@@ -31,12 +31,20 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef enum
+{
+    SYS_OK = 0,
+    SYS_ALERT,
+    SYS_SENSOR_ERROR
+} SystemState_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TEMP_THRESHOLD_MIN_C   15.0f
+#define TEMP_THRESHOLD_MAX_C   35.0f
+#define TEMP_THRESHOLD_HYST_C  1.0f
+#define ADC_MAX_VALUE          4095.0f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,7 +62,9 @@ uint8_t rx_byte;
 char cmd_buf[64];
 uint8_t cmd_pos = 0;
 uint8_t cmd_ready = 0;
+
 BMP280_HandleTypeDef bmp280;
+static SystemState_t current_state = SYS_OK;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -65,6 +75,10 @@ static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_I2C1_Init(void);
 void Sensors_Sample_And_Report(void);
+static float Threshold_FromADC(uint32_t adc_val);
+static SystemState_t FSM_NextState(SystemState_t state, uint8_t bmp_ok, float temp_c, float threshold_c);
+static const char* FSM_StateName(SystemState_t state);
+static const char* FSM_StateNameShort(SystemState_t state);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -391,9 +405,93 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     }
 }
 
+// void Sensors_Sample_And_Report(void)
+// {
+//     float temp_c, press_hpa;
+//     uint32_t adc_val = 0;
+
+//     HAL_ADC_Start(&hadc1);
+//     HAL_ADC_PollForConversion(&hadc1, 100);
+//     adc_val = HAL_ADC_GetValue(&hadc1);
+//     HAL_ADC_Stop(&hadc1);
+
+//     if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
+//     {
+//         char out_str[96];
+//         int len = snprintf(out_str, sizeof(out_str),
+//             "Temp: %.2f C, Pressure: %.2f hPa, ADC: %lu\r\n> ",
+//             temp_c, press_hpa, (unsigned long)adc_val);
+//         HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, 100);
+
+//         // printing to lcd
+//         char lcd_line1[17], lcd_line2[17];
+//         snprintf(lcd_line1, sizeof(lcd_line1), "Temp: %.1f C", temp_c);
+//         snprintf(lcd_line2, sizeof(lcd_line2), "Press: %.0f hPa", press_hpa);
+//         lcd_print_line(0, lcd_line1);
+//         lcd_print_line(1, lcd_line2);
+//     }
+//     else
+//     {
+//         HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
+//     }
+// }
+// Maps a 0-4095 ADC reading linearly onto the [TEMP_THRESHOLD_MIN_C, TEMP_THRESHOLD_MAX_C] range.
+static float Threshold_FromADC(uint32_t adc_val)
+{
+    float frac = (float)adc_val / ADC_MAX_VALUE;
+    return TEMP_THRESHOLD_MIN_C + frac * (TEMP_THRESHOLD_MAX_C - TEMP_THRESHOLD_MIN_C);
+}
+
+// Pure transition function: given the current state and this sample's inputs, returns the next state.
+// Hysteresis on the ALERT->OK edge prevents chatter when temp_c sits right at threshold_c.
+static SystemState_t FSM_NextState(SystemState_t state, uint8_t bmp_ok, float temp_c, float threshold_c)
+{
+    if (!bmp_ok)
+    {
+        return SYS_SENSOR_ERROR;
+    }
+
+    switch (state)
+    {
+        case SYS_OK:
+            return (temp_c >= threshold_c) ? SYS_ALERT : SYS_OK;
+
+        case SYS_ALERT:
+            return (temp_c < threshold_c - TEMP_THRESHOLD_HYST_C) ? SYS_OK : SYS_ALERT;
+
+        case SYS_SENSOR_ERROR:
+        default:
+            // BMP recovered this sample; re-evaluate fresh against the threshold.
+            return (temp_c >= threshold_c) ? SYS_ALERT : SYS_OK;
+    }
+}
+
+static const char* FSM_StateName(SystemState_t state)
+{
+    switch (state)
+    {
+        case SYS_OK:            return "OK";
+        case SYS_ALERT:         return "ALERT";
+        case SYS_SENSOR_ERROR:  return "SENSOR_ERROR";
+        default:                return "UNKNOWN";
+    }
+}
+
+// Abbreviated form so it fits a 16-char LCD line alongside the "STATE: " prefix.
+static const char* FSM_StateNameShort(SystemState_t state)
+{
+    switch (state)
+    {
+        case SYS_OK:            return "OK";
+        case SYS_ALERT:         return "ALERT";
+        case SYS_SENSOR_ERROR:  return "SENS_ERR";
+        default:                return "UNKNOWN";
+    }
+}
+
 void Sensors_Sample_And_Report(void)
 {
-    float temp_c, press_hpa;
+    float temp_c = 0.0f, press_hpa = 0.0f;
     uint32_t adc_val = 0;
 
     HAL_ADC_Start(&hadc1);
@@ -401,26 +499,60 @@ void Sensors_Sample_And_Report(void)
     adc_val = HAL_ADC_GetValue(&hadc1);
     HAL_ADC_Stop(&hadc1);
 
-    if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
-    {
-        char out_str[96];
-        int len = snprintf(out_str, sizeof(out_str),
-            "Temp: %.2f C, Pressure: %.2f hPa, ADC: %lu\r\n> ",
-            temp_c, press_hpa, (unsigned long)adc_val);
-        HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, 100);
+    float threshold_c = Threshold_FromADC(adc_val);
+    uint8_t bmp_ok = (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK) ? 1 : 0;
 
-        // printing to lcd
-        char lcd_line1[17], lcd_line2[17];
-        snprintf(lcd_line1, sizeof(lcd_line1), "Temp: %.1f C", temp_c);
-        snprintf(lcd_line2, sizeof(lcd_line2), "Press: %.0f hPa", press_hpa);
-        lcd_print_line(0, lcd_line1);
-        lcd_print_line(1, lcd_line2);
+    SystemState_t prev_state = current_state;
+    SystemState_t next_state = FSM_NextState(prev_state, bmp_ok, temp_c, threshold_c);
+
+    // Edge-triggered LED alert: toggle the onboard LED exactly on the OK -> ALERT transition.
+    if (prev_state == SYS_OK && next_state == SYS_ALERT)
+    {
+        HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+    }
+
+    current_state = next_state;
+
+    // --- UART report ---
+    char out_str[160];
+    int len;
+    if (bmp_ok)
+    {
+        len = snprintf(out_str, sizeof(out_str),
+            "Temp: %.2f C, Pressure: %.2f hPa, ADC: %lu, Threshold: %.2f C, State: %s\r\n> ",
+            temp_c, press_hpa, (unsigned long)adc_val, threshold_c, FSM_StateName(current_state));
     }
     else
     {
-        HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
+        len = snprintf(out_str, sizeof(out_str),
+            "BMP280 read error, ADC: %lu, Threshold: %.2f C, State: %s\r\n> ",
+            (unsigned long)adc_val, threshold_c, FSM_StateName(current_state));
     }
+    HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, 100);
+
+    if (current_state == SYS_ALERT)
+    {
+        char alert_str[80];
+        int alen = snprintf(alert_str, sizeof(alert_str),
+            "*** ALERT: Temp %.2f C >= threshold %.2f C ***\r\n> ", temp_c, threshold_c);
+        HAL_UART_Transmit(&huart2, (uint8_t*)alert_str, alen, 100);
+    }
+
+    // --- LCD report: line 1 = temp+pressure, line 2 = FSM state ---
+    char lcd_line1[17], lcd_line2[17];
+    if (bmp_ok)
+    {
+        snprintf(lcd_line1, sizeof(lcd_line1), "T:%.1fC P:%.0f", temp_c, press_hpa);
+    }
+    else
+    {
+        snprintf(lcd_line1, sizeof(lcd_line1), "BMP280 ERROR");
+    }
+    snprintf(lcd_line2, sizeof(lcd_line2), "STATE: %s", FSM_StateNameShort(current_state));
+    lcd_print_line(0, lcd_line1);
+    lcd_print_line(1, lcd_line2);
 }
+
 /* USER CODE END 4 */
 
 /**
