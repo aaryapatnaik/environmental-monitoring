@@ -1,34 +1,34 @@
+// driver for a 16x2 HD44780 LCD wired up in raw 4-bit parallel mode
+// (no i2c backpack, just direct GPIO)
+
 #ifndef LCD_H
 #define LCD_H
- 
+
 #include <stdint.h>
- 
-/* ---- Pin mapping (Nucleo-F446RE Arduino header) ----
- * Adjust these if your wiring differs. Chosen to avoid pins already
- * used by ADC (PA0), I2C1 (PB8/PB9), USART2 (PA2/PA3), and the
- * onboard LED (commonly PA5).
- *
- *   LCD RS -> PA10 (D2)
- *   LCD EN -> PB3  (D3)
- *   LCD D4 -> PB5  (D4)
- *   LCD D5 -> PB4  (D5)
- *   LCD D6 -> PB10 (D6)
- *   LCD D7 -> PA8  (D7)
- *   LCD RW -> tie directly to GND (driver only ever writes)
- *   LCD V0 -> wiper of a contrast trim pot (other legs to GND/VDD)
- *   LCD VSS -> GND, VDD -> 5V, A -> 5V (backlight +), K -> GND (backlight -)
- */
- 
-/* Set this to your ACTUAL core clock in Hz. Bare-metal default on the
- * F446RE with no clock config is 16 MHz (HSI). If you've set up the
- * PLL for a higher SYSCLK, change this to match, or the timed portions
- * of the init sequence will be off. */
+
+// pin mapping (nucleo-f446re arduino header)
+// chosen to avoid pins already used by adc (pa0), i2c1 (pb8/pb9),
+// usart2 (pa2/pa3), and the onboard led (commonly pa5)
+//
+//   LCD RS -> PA10 (D2)
+//   LCD EN -> PB3  (D3)
+//   LCD D4 -> PB5  (D4)
+//   LCD D5 -> PB4  (D5)
+//   LCD D6 -> PB10 (D6)
+//   LCD D7 -> PA8  (D7)
+//   LCD RW -> tie directly to GND (driver only ever writes)
+//   LCD V0 -> wiper of a contrast trim pot (other legs to GND/VDD)
+//   LCD VSS -> GND, VDD -> 5V, A -> 5V (backlight +), K -> GND (backlight -)
+
+// set this to the actual core clock in hz, the delay loop in lcd.c is
+// timed off it. this project runs the pll up to 84 MHz - if you run it
+// bare-metal with no clock config the default is 16 MHz (HSI) instead
 #define LCD_SYSCLK_HZ   84000000UL
- 
+
 void LCD_Init(void);
-void lcd_clear(void);
-void lcd_set_cursor(uint8_t row, uint8_t col);
-void lcd_print(const char *str);
-void lcd_print_line(uint8_t row, const char *str);
- 
-#endif /* LCD_H */
+void LCD_Clear(void);
+void LCD_SetCursor(uint8_t row, uint8_t col);
+void LCD_Print(const char *str);
+void LCD_PrintLine(uint8_t row, const char *str);
+
+#endif
