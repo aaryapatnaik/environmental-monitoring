@@ -1,3 +1,6 @@
+// driver for the BMP280 temp/pressure sensor over i2c. handles calibration
+// readout, the datasheet compensation math, and verified register writes
+
 #ifndef BMP280_H
 #define BMP280_H
 
@@ -9,11 +12,19 @@
 #define BMP280_REG_CHIP_ID      0xD0
 #define BMP280_REG_CTRL_MEAS    0xF4
 #define BMP280_REG_CONFIG       0xF5
+#define BMP280_REG_STATUS       0xF3
 #define BMP280_REG_PRESS_MSB    0xF7
 #define BMP280_REG_CALIB_START  0x88
 
 #define BMP280_CHIP_ID          0x58
 
+// ctrl_meas: normal mode, temp oversampling x1, pressure oversampling x1
+#define BMP280_CTRL_MEAS_NORMAL_MODE  0x27
+// config: no IIR filter, shortest standby time between samples
+#define BMP280_CONFIG_NO_FILTER       0x00
+
+// calibration constants read out of the sensor once at init, used by the
+// compensation formulas to convert raw ADC readings into real units
 typedef struct {
     uint16_t dig_T1;
     int16_t  dig_T2;
@@ -32,11 +43,15 @@ typedef struct {
 typedef struct {
     I2C_HandleTypeDef *hi2c;
     BMP280_CalibData calib;
-    int32_t t_fine;
+    int32_t t_fine; // running temp value the pressure compensation needs too
 } BMP280_HandleTypeDef;
 
+// reads chip id, pulls calibration data, and configures the sensor.
+// returns HAL_ERROR if the chip id doesn't match or any i2c step fails
 HAL_StatusTypeDef BMP280_Init(BMP280_HandleTypeDef *dev, I2C_HandleTypeDef *hi2c);
+// reads and compensates one temp/pressure sample
 HAL_StatusTypeDef BMP280_ReadData(BMP280_HandleTypeDef *dev, float *temperature_c, float *pressure_hpa);
+// dumps raw adc values and a couple status registers over uart for debugging
 void BMP280_DebugPrint(BMP280_HandleTypeDef *dev, UART_HandleTypeDef *huart);
 
 #endif

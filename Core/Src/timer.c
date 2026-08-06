@@ -1,4 +1,3 @@
-// timer.c
 // tim2 setup and its period-elapsed callback. see timer.h for the
 // sample_ready flag contract
 
