@@ -45,6 +45,8 @@ typedef enum
 #define TEMP_THRESHOLD_MAX_C   35.0f
 #define TEMP_THRESHOLD_HYST_C  1.0f
 #define ADC_MAX_VALUE          4095.0f
+#define UART_TX_TIMEOUT_MS     100  // shared by every transmit call so they all agree
+#define ADC_CONV_TIMEOUT_MS    100
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -74,7 +76,8 @@ static void MX_USART2_UART_Init(void);
 static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
 static void MX_I2C1_Init(void);
-void Sensors_Sample_And_Report(void);
+static void Sensors_Sample_And_Report(void);
+static uint32_t ADC_ReadRaw(void);
 static float Threshold_FromADC(uint32_t adc_val);
 static SystemState_t FSM_NextState(SystemState_t state, uint8_t bmp_ok, float temp_c, float threshold_c);
 static const char* FSM_StateName(SystemState_t state);
@@ -121,24 +124,24 @@ int main(void)
   /* USER CODE BEGIN 2 */
   MX_I2C1_Init();
   LCD_Init();
-  
 
+  // sensor doesn't always ack on the very first poll right after power-up, so retry
+  // a few times before giving up and running in SYS_SENSOR_ERROR for the rest of runtime
   uint8_t bmp_ok = 0;
   for (int i = 0; i < 5 && !bmp_ok; i++) {
       HAL_Delay(50);
       if (BMP280_Init(&bmp280, &hi2c1) == HAL_OK) bmp_ok = 1;
   }
   if (bmp_ok) {
-      HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init OK\r\n", 16, 100);
+      HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init OK\r\n", 16, UART_TX_TIMEOUT_MS);
   }
   else {
-      HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init FAILED\r\n", 20, 100);
+      HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 init FAILED\r\n", 20, UART_TX_TIMEOUT_MS);
   }
   Sample_Timer_Init();
-  // HAL_UART_Transmit(&huart2, (uint8_t*)"Timer init called\r\n", 19, 100);
 
   uint8_t startup[] = "UART ready\r\n> ";
-  HAL_UART_Transmit(&huart2, startup, sizeof(startup)-1, 100);
+  HAL_UART_Transmit(&huart2, startup, sizeof(startup)-1, UART_TX_TIMEOUT_MS);
   HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
 
   HAL_NVIC_SetPriority(USART2_IRQn, 0, 0);
@@ -154,48 +157,36 @@ int main(void)
         cmd_ready = 0;
 
         if (strcmp(cmd_buf, "HI") == 0)
-            HAL_UART_Transmit(&huart2, (uint8_t*)"HELLO\r\n> ", 9, 100);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"HELLO\r\n> ", 9, UART_TX_TIMEOUT_MS);
         else if (strcmp(cmd_buf, "LED ON") == 0)
         {
             HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
-            HAL_UART_Transmit(&huart2, (uint8_t*)"LED ON\r\n> ", 10, 100);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"LED ON\r\n> ", 10, UART_TX_TIMEOUT_MS);
         }
         else if (strcmp(cmd_buf, "LED OFF") == 0)
         {
             HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
-            HAL_UART_Transmit(&huart2, (uint8_t*)"LED OFF\r\n> ", 11, 100);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"LED OFF\r\n> ", 11, UART_TX_TIMEOUT_MS);
         }
-        else if (strcmp(cmd_buf, "READ_ADC") == 0)   // <-- add this block
+        else if (strcmp(cmd_buf, "READ_ADC") == 0)
         {
-          HAL_ADC_Start(&hadc1);
-          HAL_ADC_PollForConversion(&hadc1, 100);
-          uint32_t adc_val = HAL_ADC_GetValue(&hadc1);
-          HAL_ADC_Stop(&hadc1);
+          uint32_t adc_val = ADC_ReadRaw();
 
           char adc_str[32];
           int len = snprintf(adc_str, sizeof(adc_str), "ADC: %lu\r\n> ", adc_val);
-          HAL_UART_Transmit(&huart2, (uint8_t*)adc_str, len, 100);
+          HAL_UART_Transmit(&huart2, (uint8_t*)adc_str, len, UART_TX_TIMEOUT_MS);
         }
         else if (strcmp(cmd_buf, "READ_BMP") == 0)
         {
-          // float temp_c, press_hpa;
-          // if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
-          // {
-          //   char bmp_str[64];
-          //   int len = snprintf(bmp_str, sizeof(bmp_str), "Temp: %.2f C, Pressure: %.2f hPa\r\n> ", temp_c, press_hpa);
-          //   HAL_UART_Transmit(&huart2, (uint8_t*)bmp_str, len, 100);
-          // }
-          // else
-          //   HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
           Sensors_Sample_And_Report();
         }
         else if (strcmp(cmd_buf, "DEBUG_BMP") == 0)
         {
           BMP280_DebugPrint(&bmp280, &huart2);
-          HAL_UART_Transmit(&huart2, (uint8_t*)"> ", 2, 100);
+          HAL_UART_Transmit(&huart2, (uint8_t*)"> ", 2, UART_TX_TIMEOUT_MS);
         }
         else
-            HAL_UART_Transmit(&huart2, (uint8_t*)"Unknown command\r\n> ", 18, 100);
+            HAL_UART_Transmit(&huart2, (uint8_t*)"Unknown command\r\n> ", 18, UART_TX_TIMEOUT_MS);
 
         cmd_pos = 0;
         memset(cmd_buf, 0, sizeof(cmd_buf));
@@ -255,7 +246,9 @@ void SystemClock_Config(void)
   }
 }
 
-static void MX_I2C1_Init(void) // i2c1 init
+// open-drain+pullup is required by the i2c spec (bus is wired-and), 100khz standard mode
+// is plenty for reading the bmp280 and keeps things simple vs fast mode
+static void MX_I2C1_Init(void)
 {
     __HAL_RCC_I2C1_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
@@ -318,18 +311,16 @@ static void MX_USART2_UART_Init(void)
 
 static void MX_ADC1_Init(void)
 {
-    // Enable clocks for ADC1 and GPIOA
     __HAL_RCC_ADC1_CLK_ENABLE();
-    __HAL_RCC_GPIOA_CLK_ENABLE(); // already enabled, but harmless
+    __HAL_RCC_GPIOA_CLK_ENABLE(); // already enabled elsewhere, harmless to call again
 
-    // Configure PA0 as analog input
     GPIO_InitTypeDef GPIO_InitStruct = {0};
     GPIO_InitStruct.Pin = GPIO_PIN_0;
     GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    // Configure ADC1
+    // single conversion mode since reads are triggered on demand, not free-running
     hadc1.Instance = ADC1;
     hadc1.Init.Resolution = ADC_RESOLUTION_12B;
     hadc1.Init.ScanConvMode = DISABLE;
@@ -339,7 +330,7 @@ static void MX_ADC1_Init(void)
     hadc1.Init.NbrOfConversion = 1;
     HAL_ADC_Init(&hadc1);
 
-    // Configure channel 0
+    // pa0/channel 0 is the pot, repurposed as a live alert-threshold input now
     ADC_ChannelConfTypeDef sConfig = {0};
     sConfig.Channel = ADC_CHANNEL_0;
     sConfig.Rank = 1;
@@ -396,54 +387,34 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
             cmd_buf[cmd_pos] = '\0';
             cmd_ready = 1;
         }
-        else if (cmd_pos < 63)
+        else if (cmd_pos < sizeof(cmd_buf) - 1) // leaves room for the null terminator
         {
             cmd_buf[cmd_pos++] = rx_byte;
         }
 
+        // HAL disarms rx after each byte, must re-arm here or the next byte gets missed
         HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
     }
 }
 
-// void Sensors_Sample_And_Report(void)
-// {
-//     float temp_c, press_hpa;
-//     uint32_t adc_val = 0;
+// pulled out since READ_ADC and Sensors_Sample_And_Report both need this exact sequence
+static uint32_t ADC_ReadRaw(void)
+{
+    HAL_ADC_Start(&hadc1);
+    HAL_ADC_PollForConversion(&hadc1, ADC_CONV_TIMEOUT_MS);
+    uint32_t val = HAL_ADC_GetValue(&hadc1);
+    HAL_ADC_Stop(&hadc1);
+    return val;
+}
 
-//     HAL_ADC_Start(&hadc1);
-//     HAL_ADC_PollForConversion(&hadc1, 100);
-//     adc_val = HAL_ADC_GetValue(&hadc1);
-//     HAL_ADC_Stop(&hadc1);
-
-//     if (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK)
-//     {
-//         char out_str[96];
-//         int len = snprintf(out_str, sizeof(out_str),
-//             "Temp: %.2f C, Pressure: %.2f hPa, ADC: %lu\r\n> ",
-//             temp_c, press_hpa, (unsigned long)adc_val);
-//         HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, 100);
-
-//         // printing to lcd
-//         char lcd_line1[17], lcd_line2[17];
-//         snprintf(lcd_line1, sizeof(lcd_line1), "Temp: %.1f C", temp_c);
-//         snprintf(lcd_line2, sizeof(lcd_line2), "Press: %.0f hPa", press_hpa);
-//         lcd_print_line(0, lcd_line1);
-//         lcd_print_line(1, lcd_line2);
-//     }
-//     else
-//     {
-//         HAL_UART_Transmit(&huart2, (uint8_t*)"BMP280 read error\r\n> ", 21, 100);
-//     }
-// }
-// Maps a 0-4095 ADC reading linearly onto the [TEMP_THRESHOLD_MIN_C, TEMP_THRESHOLD_MAX_C] range.
+// maps the 0-4095 adc range onto [TEMP_THRESHOLD_MIN_C, TEMP_THRESHOLD_MAX_C] linearly
 static float Threshold_FromADC(uint32_t adc_val)
 {
     float frac = (float)adc_val / ADC_MAX_VALUE;
     return TEMP_THRESHOLD_MIN_C + frac * (TEMP_THRESHOLD_MAX_C - TEMP_THRESHOLD_MIN_C);
 }
 
-// Pure transition function: given the current state and this sample's inputs, returns the next state.
-// Hysteresis on the ALERT->OK edge prevents chatter when temp_c sits right at threshold_c.
+// hysteresis on the alert->ok edge stops flapping when temp sits right at the threshold
 static SystemState_t FSM_NextState(SystemState_t state, uint8_t bmp_ok, float temp_c, float threshold_c)
 {
     if (!bmp_ok)
@@ -461,7 +432,7 @@ static SystemState_t FSM_NextState(SystemState_t state, uint8_t bmp_ok, float te
 
         case SYS_SENSOR_ERROR:
         default:
-            // BMP recovered this sample; re-evaluate fresh against the threshold.
+            // no memory of pre-error state, so a recovered reading is treated as fresh
             return (temp_c >= threshold_c) ? SYS_ALERT : SYS_OK;
     }
 }
@@ -477,7 +448,7 @@ static const char* FSM_StateName(SystemState_t state)
     }
 }
 
-// Abbreviated form so it fits a 16-char LCD line alongside the "STATE: " prefix.
+// shortened so it plus the "STATE: " prefix still fits a 16-char lcd line
 static const char* FSM_StateNameShort(SystemState_t state)
 {
     switch (state)
@@ -489,23 +460,20 @@ static const char* FSM_StateNameShort(SystemState_t state)
     }
 }
 
-void Sensors_Sample_And_Report(void)
+// single entry point for sample+report so timer flag and READ_BMP share one code path
+// instead of drifting out of sync across two copies of uart/lcd/fsm logic
+static void Sensors_Sample_And_Report(void)
 {
     float temp_c = 0.0f, press_hpa = 0.0f;
-    uint32_t adc_val = 0;
 
-    HAL_ADC_Start(&hadc1);
-    HAL_ADC_PollForConversion(&hadc1, 100);
-    adc_val = HAL_ADC_GetValue(&hadc1);
-    HAL_ADC_Stop(&hadc1);
-
+    uint32_t adc_val = ADC_ReadRaw();
     float threshold_c = Threshold_FromADC(adc_val);
     uint8_t bmp_ok = (BMP280_ReadData(&bmp280, &temp_c, &press_hpa) == HAL_OK) ? 1 : 0;
 
     SystemState_t prev_state = current_state;
     SystemState_t next_state = FSM_NextState(prev_state, bmp_ok, temp_c, threshold_c);
 
-    // Edge-triggered LED alert: toggle the onboard LED exactly on the OK -> ALERT transition.
+    // toggling only on the ok->alert edge keeps this a one-shot notice, not a re-trigger
     if (prev_state == SYS_OK && next_state == SYS_ALERT)
     {
         HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
@@ -528,14 +496,14 @@ void Sensors_Sample_And_Report(void)
             "BMP280 read error, ADC: %lu, Threshold: %.2f C, State: %s\r\n> ",
             (unsigned long)adc_val, threshold_c, FSM_StateName(current_state));
     }
-    HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, 100);
+    HAL_UART_Transmit(&huart2, (uint8_t*)out_str, len, UART_TX_TIMEOUT_MS);
 
     if (current_state == SYS_ALERT)
     {
         char alert_str[80];
         int alen = snprintf(alert_str, sizeof(alert_str),
             "*** ALERT: Temp %.2f C >= threshold %.2f C ***\r\n> ", temp_c, threshold_c);
-        HAL_UART_Transmit(&huart2, (uint8_t*)alert_str, alen, 100);
+        HAL_UART_Transmit(&huart2, (uint8_t*)alert_str, alen, UART_TX_TIMEOUT_MS);
     }
 
     // --- LCD report: line 1 = temp+pressure, line 2 = FSM state ---
@@ -549,8 +517,8 @@ void Sensors_Sample_And_Report(void)
         snprintf(lcd_line1, sizeof(lcd_line1), "BMP280 ERROR");
     }
     snprintf(lcd_line2, sizeof(lcd_line2), "STATE: %s", FSM_StateNameShort(current_state));
-    lcd_print_line(0, lcd_line1);
-    lcd_print_line(1, lcd_line2);
+    LCD_PrintLine(0, lcd_line1);
+    LCD_PrintLine(1, lcd_line2);
 }
 
 /* USER CODE END 4 */
