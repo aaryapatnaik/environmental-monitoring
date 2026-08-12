@@ -2,6 +2,10 @@
 
 Bare-metal HAL environmental monitor on the Nucleo-F446RE. Reads a BMP280 (temp/pressure) over I2C, uses a potentiometer as a live alert threshold, runs a 3-state FSM with hysteresis, mirrors status to a 16x2 LCD, and exposes a UART shell. Built with Makefile + arm-none-eabi-gcc + OpenOCD (macOS, no CubeIDE).
 
+## Demo
+
+[![Demo video](https://img.youtube.com/vi/iZEqxke5lKk/0.jpg)](https://www.youtube.com/watch?v=iZEqxke5lKk)
+
 ## Features
 
 - UART shell, interrupt-driven RX, 115200 8N1
